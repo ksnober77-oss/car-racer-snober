@@ -53,9 +53,23 @@
         /* Canvas Responsive Container */
         #gameCanvas {
             background-color: #334155;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 40px rgba(56, 189, 248, 0.16);
             touch-action: none;
+            image-rendering: auto;
         }
+
+        .race-hint {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity .25s ease;
+            text-shadow: 0 0 12px currentColor;
+        }
+
+        #gameplayScreen:has(#gameCanvas) .race-hint { opacity: .72; }
     </style>
 </head>
 <body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-center p-2 sm:p-4 overflow-x-hidden">
@@ -585,12 +599,16 @@
         }
 
         // GAME PHYSICS & UPDATE LOOP
-        function updateGame() {
+        function updateGame(delta = 1 / 60) {
             if (!game.active || game.paused) return;
+
+            // Keep the game frame-rate independent and avoid huge jumps after tab switches.
+            const frameScale = Math.min(2.5, Math.max(0.25, delta * 60));
+            game.elapsed += delta;
 
             // Speed modifiers
             const baseSpeed = game.currentStage.speed;
-            const currentSpeed = game.isNitroActive ? baseSpeed * 1.8 : baseSpeed;
+            const currentSpeed = (game.isNitroActive ? baseSpeed * 1.8 : baseSpeed) * frameScale;
 
             // Update Progress
             game.distance += currentSpeed;
@@ -606,10 +624,10 @@
             // Nitro Management
             if (keys.Space || game.isNitroActive) {
                 if (game.nitro > 0) {
-                    game.nitro -= 0.8;
+                    game.nitro = Math.max(0, game.nitro - 0.8 * frameScale);
                     game.isNitroActive = true;
                     // Exhaust particles
-                    if (Math.random() < 0.6) {
+                    if (Math.random() < 0.6 * frameScale) {
                         game.particles.push({
                             x: game.playerX + (Math.random() - 0.5) * 12,
                             y: game.playerY + 35,
@@ -625,18 +643,18 @@
                 }
             } else {
                 game.isNitroActive = false;
-                if (game.nitro < 100) game.nitro += 0.2; // Recharge nitro slowly
+                if (game.nitro < 100) game.nitro = Math.min(100, game.nitro + 0.2 * frameScale); // Recharge nitro slowly
             }
             document.getElementById('hudNitroBar').style.width = game.nitro + '%';
 
             // Steering Input
-            if (keys.Left && game.playerX > 85) game.playerX -= 5.5;
-            if (keys.Right && game.playerX < 275) game.playerX += 5.5;
+            if (keys.Left && game.playerX > 85) game.playerX -= 5.5 * frameScale;
+            if (keys.Right && game.playerX < 275) game.playerX += 5.5 * frameScale;
 
             // Jump Physics
             if (game.isJumping) {
-                game.jumpAltitude += game.jumpVel;
-                game.jumpVel -= 0.8;
+                game.jumpAltitude += game.jumpVel * frameScale;
+                game.jumpVel -= 0.8 * frameScale;
                 if (game.jumpAltitude <= 0) {
                     game.jumpAltitude = 0;
                     game.isJumping = false;
@@ -661,7 +679,8 @@
                 // Cannot hit obstacles if jumped high enough
                 if (isColliding && game.jumpAltitude < 18) {
                     soundFX.playHit();
-                    createExplosion(game.playerX, game.playerY, '#ef4444', 15);
+                    createExplosion(game.playerX, game.playerY, '#ef4444', 22);
+                    game.shake = 10;
                     game.obstacles.splice(i, 1);
 
                     // Penalty
@@ -679,7 +698,7 @@
             for (let i = game.collectibles.length - 1; i >= 0; i--) {
                 const col = game.collectibles[i];
                 col.y += currentSpeed;
-                col.animAngle += 0.05;
+                col.animAngle += 0.05 * frameScale;
 
                 const isCollected = Math.abs(game.playerX - col.x) < 30 && Math.abs(game.playerY - col.y) < 35;
 
@@ -711,9 +730,10 @@
             // Update Particles
             for (let i = game.particles.length - 1; i >= 0; i--) {
                 const p = game.particles[i];
-                p.x += p.vx;
-                p.y += p.vy;
-                p.life -= 0.04;
+                p.x += p.vx * frameScale;
+                p.y += p.vy * frameScale;
+                p.vy += 0.08 * frameScale;
+                p.life -= 0.04 * frameScale;
                 if (p.life <= 0) game.particles.splice(i, 1);
             }
         }
@@ -724,18 +744,30 @@
             const ctx = canvas.getContext('2d');
             const w = canvas.width;
             const h = canvas.height;
+            game.shake *= 0.86;
+            ctx.save();
+            if (game.shake > 0.2) ctx.translate((Math.random() - 0.5) * game.shake, (Math.random() - 0.5) * game.shake);
 
-            // Background / Grass
-            ctx.fillStyle = game.currentStage.grass;
+            // Layered background glow for depth.
+            const bg = ctx.createLinearGradient(0, 0, w, h);
+            bg.addColorStop(0, game.currentStage.bg);
+            bg.addColorStop(1, game.currentStage.grass);
+            ctx.fillStyle = bg;
             ctx.fillRect(0, 0, w, h);
 
             // Road Bounds (Middle 220px)
             const roadLeft = 70;
             const roadWidth = 220;
 
-            // Road Asphalt
-            ctx.fillStyle = game.currentStage.road;
+            // Road Asphalt with a soft neon center glow.
+            const roadGradient = ctx.createLinearGradient(roadLeft, 0, roadLeft + roadWidth, 0);
+            roadGradient.addColorStop(0, '#0b1220');
+            roadGradient.addColorStop(0.5, game.currentStage.road);
+            roadGradient.addColorStop(1, '#0b1220');
+            ctx.fillStyle = roadGradient;
             ctx.fillRect(roadLeft, 0, roadWidth, h);
+            ctx.fillStyle = 'rgba(56, 189, 248, 0.07)';
+            ctx.fillRect(roadLeft + roadWidth / 2 - 2, 0, 4, h);
 
             // Road Borders
             ctx.fillStyle = '#ffffff';
@@ -767,10 +799,27 @@
                 }
             }
 
+            // Nitro speed streaks make acceleration visible without hiding gameplay.
+            if (game.isNitroActive) {
+                ctx.save();
+                ctx.globalAlpha = 0.42;
+                ctx.strokeStyle = '#67e8f9';
+                ctx.lineWidth = 2;
+                for (let i = 0; i < 12; i++) {
+                    const sx = roadLeft + 10 + ((i * 37) % (roadWidth - 20));
+                    const sy = (i * 53 + game.elapsed * 520) % h;
+                    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx, sy + 18 + (i % 3) * 9); ctx.stroke();
+                }
+                ctx.restore();
+            }
+
             // Draw Collectibles
             game.collectibles.forEach(col => {
                 ctx.save();
                 ctx.translate(col.x, col.y);
+                ctx.rotate(Math.sin(col.animAngle) * 0.08);
+                ctx.shadowBlur = 16;
+                ctx.shadowColor = col.type === 'nitro' ? '#22d3ee' : '#facc15';
                 if (col.type === 'coin') {
                     ctx.fillStyle = '#f59e0b';
                     ctx.beginPath();
@@ -806,6 +855,9 @@
             game.obstacles.forEach(obs => {
                 ctx.save();
                 ctx.translate(obs.x, obs.y);
+                ctx.rotate(obs.rot + game.elapsed * 0.8);
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#fb7185';
                 if (obs.type === 'cone') {
                     ctx.fillStyle = '#f97316';
                     ctx.beginPath();
@@ -838,6 +890,17 @@
             });
 
             // Draw Player Car
+            if (game.isNitroActive) {
+                ctx.save();
+                ctx.globalAlpha = 0.4;
+                ctx.shadowBlur = 24;
+                ctx.shadowColor = '#22d3ee';
+                ctx.fillStyle = '#22d3ee';
+                ctx.ellipse(game.playerX, game.playerY + 25, 34, 52, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+
             drawCarBody(
                 ctx,
                 game.playerX,
@@ -848,24 +911,27 @@
                 userState.selectedColor,
                 game.jumpAltitude
             );
+            ctx.restore();
         }
 
         // MAIN GAME LOOP
-        function gameLoop() {
-            updateGame();
+        function gameLoop(timestamp = performance.now()) {
+            if (!game.lastFrameTime) game.lastFrameTime = timestamp;
+            const delta = Math.min(0.05, Math.max(0.008, (timestamp - game.lastFrameTime) / 1000));
+            game.lastFrameTime = timestamp;
+            updateGame(delta);
             renderGame();
-            if (game.active) {
-                game.animId = requestAnimationFrame(gameLoop);
-            }
+            if (game.active) game.animId = requestAnimationFrame(gameLoop);
         }
 
         // SETUP INPUT LISTENERS (KEYBOARD + TOUCH)
         function setupControls() {
             // Keyboard
             window.addEventListener('keydown', (e) => {
-                if (e.key === 'ArrowRight' || e.key === 'd') keys.Left = true; // RTL mirrored for intuitive feel
-                if (e.key === 'ArrowLeft' || e.key === 'a') keys.Right = true;
-                if (e.key === 'ArrowUp' || e.key === 'w') triggerJump();
+                if (['ArrowRight', 'ArrowLeft', 'ArrowUp', ' ', 'Shift'].includes(e.key)) e.preventDefault();
+                if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') keys.Left = true; // RTL mirrored for intuitive feel
+                if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') keys.Right = true;
+                if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') triggerJump();
                 if (e.key === ' ' || e.key === 'Shift') keys.Space = true;
             });
 
@@ -881,14 +947,14 @@
             const btnJump = document.getElementById('btnJump');
             const btnNitro = document.getElementById('btnNitro');
 
-            btnLeft.addEventListener('touchstart', (e) => { e.preventDefault(); keys.Left = true; });
-            btnLeft.addEventListener('touchend', (e) => { e.preventDefault(); keys.Left = false; });
-            btnRight.addEventListener('touchstart', (e) => { e.preventDefault(); keys.Right = true; });
-            btnRight.addEventListener('touchend', (e) => { e.preventDefault(); keys.Right = false; });
-
-            btnJump.addEventListener('touchstart', (e) => { e.preventDefault(); triggerJump(); });
-            btnNitro.addEventListener('touchstart', (e) => { e.preventDefault(); keys.Space = true; });
-            btnNitro.addEventListener('touchend', (e) => { e.preventDefault(); keys.Space = false; });
+            const hold = (element, onStart, onEnd) => {
+                element.addEventListener('pointerdown', (e) => { e.preventDefault(); onStart(); });
+                ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => element.addEventListener(type, (e) => { e.preventDefault(); onEnd(); }));
+            };
+            hold(btnLeft, () => { keys.Left = true; }, () => { keys.Left = false; });
+            hold(btnRight, () => { keys.Right = true; }, () => { keys.Right = false; });
+            hold(btnNitro, () => { keys.Space = true; }, () => { keys.Space = false; });
+            btnJump.addEventListener('pointerdown', (e) => { e.preventDefault(); triggerJump(); });
         }
 
         function triggerJump() {
@@ -1013,6 +1079,9 @@
             game.obstacles = [];
             game.collectibles = [];
             game.particles = [];
+            game.elapsed = 0;
+            game.shake = 0;
+            game.lastFrameTime = 0;
             game.active = true;
             game.paused = false;
 
@@ -1063,8 +1132,12 @@
         }
 
         function nextLevel() {
-            const nextId = Math.min(STAGES.length, game.currentStage.id + 1);
-            startStage(nextId);
+            if (game.currentStage.id >= STAGES.length) {
+                document.getElementById('winModal').classList.add('hidden');
+                showScreen('levelSelectScreen');
+                return;
+            }
+            startStage(game.currentStage.id + 1);
         }
 
         function togglePauseGame() {
